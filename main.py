@@ -187,6 +187,8 @@ def create_video(slide_filenames, audio_filenames, output_filename="presentation
     for clip in clips:
         clip.close()
 
+import os
+
 def main(pdf_path, voice="alloy"):
     # Step 1: Extract text from PDF
     print("Extracting text from PDF...")
@@ -203,21 +205,26 @@ def main(pdf_path, voice="alloy"):
     # Parse the slides content
     slides = parse_slides_content(slides_content)
 
-    audio_filenames = []
+    # List to track temp files
+    temp_files = []
 
     # Step 4: Create PPTX presentation
     print("Creating PPTX presentation...")
     pptx_filename = 'presentation.pptx'
     create_presentation(slides, pptx_filename)
+    temp_files.append(pptx_filename)  # Track the PPTX file
 
     # Step 5: Export slides to images
     print("Exporting slides to images...")
     slide_filenames = export_slides_to_images(pptx_filename)
+    temp_files.extend(slide_filenames)  # Track all slide image files
 
     # Ensure the number of slide images matches the number of slides
     if len(slide_filenames) != len(slides):
         print("Error: Number of slide images does not match number of slides.")
         return
+
+    audio_filenames = []
 
     for idx, slide in enumerate(slides):
         print(f"Processing Slide {idx+1}: {slide['title']}")
@@ -228,11 +235,23 @@ def main(pdf_path, voice="alloy"):
         # Step 7: Generate audio
         audio_filename = generate_audio(script, idx+1, voice=voice)
         audio_filenames.append(audio_filename)
+        temp_files.append(audio_filename)  # Track each audio file
 
     # Step 8: Create video
     print("Creating video presentation...")
-    create_video(slide_filenames, audio_filenames)
+    output_filename = "presentation.mp4"
+    create_video(slide_filenames, audio_filenames, output_filename)
     print("Video presentation created successfully!")
+
+    # Clean up temporary files, keeping only the final MP4
+    print("Cleaning up temporary files...")
+    for temp_file in temp_files:
+        try:
+            os.remove(temp_file)
+        except OSError as e:
+            print(f"Error deleting {temp_file}: {e}")
+
+    print("Temporary files deleted. Only the final MP4 file remains.")
 
 if __name__ == '__main__':
     pdf_path = 'input.pdf'  # Replace with your PDF file path
