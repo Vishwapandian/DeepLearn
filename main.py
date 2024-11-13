@@ -187,8 +187,6 @@ def create_video(slide_filenames, audio_filenames, output_filename="presentation
     for clip in clips:
         clip.close()
 
-import os
-
 def main(pdf_path, voice="alloy"):
     # Step 1: Extract text from PDF
     print("Extracting text from PDF...")
