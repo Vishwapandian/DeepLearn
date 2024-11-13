@@ -31,7 +31,7 @@ def summarize_text(text, max_tokens=500):
     # Summarize the text to reduce token usage
     prompt = f"Please provide a concise summary of the following text:\n\n{text}"
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo-0125",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "You are an assistant that summarizes text efficiently."},
             {"role": "user", "content": prompt}
@@ -40,13 +40,14 @@ def summarize_text(text, max_tokens=500):
         temperature=0.5,
     )
     summary = response.choices[0].message.content.strip()
+    print(summary)
     return summary
 
 def generate_slides_content(summarized_text):
     # Generate slides content using the summarized text
     prompt = f"Create up to 5 slide titles with bullet points from the following summary. Keep it concise:\n\n{summarized_text}"
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo-0125",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "You are an assistant that creates concise presentation slides."},
             {"role": "user", "content": prompt}
@@ -55,6 +56,7 @@ def generate_slides_content(summarized_text):
         temperature=0.5,
     )
     slides_content = response.choices[0].message.content.strip()
+    print(slides_content)
     return slides_content
 
 def generate_audio(script, slide_number, voice="alloy"):
@@ -76,7 +78,7 @@ def generate_presentation_script(slide_content, summarized_text):
     # Use the slide content and summarized text to generate a concise script
     prompt = f"Write a brief and engaging script for a presentation slide based on the following:\n\nSlide Title: {slide_content['title']}\nBullet Points:\n" + "\n".join(f"- {bp}" for bp in slide_content['bullet_points']) + f"\n\nUse the following summary for context:\n{summarized_text}"
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo-0125",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "You are an assistant that writes concise presentation scripts."},
             {"role": "user", "content": prompt}
@@ -85,15 +87,16 @@ def generate_presentation_script(slide_content, summarized_text):
         temperature=0.5,
     )
     script = response.choices[0].message.content.strip()
+    print(script)
     return script
 
 def parse_slides_content(slides_content):
     slides = []
     # Split slides content into individual slides
-    slide_sections = re.split(r'\n(?=Slide \d+:)', slides_content)
+    slide_sections = re.split(r'\n(?=### Slide \d+:)', slides_content)
     for slide_section in slide_sections:
         # Extract title
-        title_match = re.match(r'Slide \d+: (.+)', slide_section)
+        title_match = re.match(r'### Slide \d+: (.+)', slide_section)
         if title_match:
             title = title_match.group(1).strip()
             # Extract bullet points
