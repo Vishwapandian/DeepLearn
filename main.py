@@ -14,6 +14,7 @@ nltk.download('punkt')
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
 
 # Initialize OpenAI client with API key
 client = OpenAI(
@@ -104,7 +105,7 @@ def parse_slides_content(slides_content):
             slides.append({'title': title, 'bullet_points': bullet_points})
     return slides
 
-# New function to create intro and outro slides
+# Updated function to create intro and outro slides with custom title and presenter name
 def create_intro_slide(prs, title_text, subtitle_text):
     slide = prs.slides.add_slide(prs.slide_layouts[0])  # Title Slide layout
     title_placeholder = slide.shapes.title
@@ -112,14 +113,18 @@ def create_intro_slide(prs, title_text, subtitle_text):
 
     # Set title
     title_placeholder.text = title_text
-    title_placeholder.text_frame.paragraphs[0].font.size = Pt(48)
-    title_placeholder.text_frame.paragraphs[0].font.bold = True
-    title_placeholder.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+    title_tf = title_placeholder.text_frame
+    title_tf.paragraphs[0].font.size = Pt(48)
+    title_tf.paragraphs[0].font.bold = True
+    title_tf.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+    title_tf.paragraphs[0].alignment = PP_ALIGN.CENTER
 
     # Set subtitle
     subtitle_placeholder.text = subtitle_text
-    subtitle_placeholder.text_frame.paragraphs[0].font.size = Pt(24)
-    subtitle_placeholder.text_frame.paragraphs[0].font.color.rgb = RGBColor(200, 200, 200)
+    subtitle_tf = subtitle_placeholder.text_frame
+    subtitle_tf.paragraphs[0].font.size = Pt(28)
+    subtitle_tf.paragraphs[0].font.color.rgb = RGBColor(200, 200, 200)
+    subtitle_tf.paragraphs[0].alignment = PP_ALIGN.CENTER
 
     # Set background color
     fill = slide.background.fill
@@ -128,9 +133,10 @@ def create_intro_slide(prs, title_text, subtitle_text):
 
 def create_outro_slide(prs, thank_you_text):
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank Slide layout
-    left = top = Inches(1)
-    width = prs.slide_width - Inches(2)
-    height = prs.slide_height - Inches(2)
+    left = Inches(0)
+    top = Inches(2)
+    width = prs.slide_width
+    height = Inches(3)
 
     textbox = slide.shapes.add_textbox(left, top, width, height)
     tf = textbox.text_frame
@@ -139,22 +145,25 @@ def create_outro_slide(prs, thank_you_text):
     p.font.size = Pt(48)
     p.font.bold = True
     p.font.color.rgb = RGBColor(255, 255, 255)
-    p.alignment = 1  # Center alignment
+    p.alignment = PP_ALIGN.CENTER
 
     # Set background color
     fill = slide.background.fill
     fill.solid()
     fill.fore_color.rgb = RGBColor(0, 70, 127)  # Dark blue
 
-# Updated function to create a PPTX presentation with better visuals and intro/outro slides
-def create_presentation(slides, pptx_filename='presentation.pptx'):
+# Updated function to create a PPTX presentation with better visuals and custom intro slide
+def create_presentation(slides, pptx_filename='presentation.pptx', presenter_name="DeepLearn"):
     prs = Presentation()
     # Set slide size to widescreen 16:9
     prs.slide_width = Inches(13.33)
     prs.slide_height = Inches(7.5)
 
-    # Create intro slide
-    create_intro_slide(prs, "Presentation Title", "Subtitle or Presenter Name")
+    # Use the title of the first slide as the presentation title
+    presentation_title = slides[0]['title'] if slides else "Presentation"
+
+    # Create intro slide with custom title and presenter name
+    create_intro_slide(prs, presentation_title, f"Presented by {presenter_name}")
 
     for slide_content in slides:
         slide = prs.slides.add_slide(prs.slide_layouts[1])  # Using Title and Content layout
@@ -163,9 +172,10 @@ def create_presentation(slides, pptx_filename='presentation.pptx'):
         
         # Set the title
         title_placeholder.text = slide_content['title']
-        title_placeholder.text_frame.paragraphs[0].font.size = Pt(36)
-        title_placeholder.text_frame.paragraphs[0].font.bold = True
-        title_placeholder.text_frame.paragraphs[0].font.color.rgb = RGBColor(0, 70, 127)
+        title_tf = title_placeholder.text_frame
+        title_tf.paragraphs[0].font.size = Pt(36)
+        title_tf.paragraphs[0].font.bold = True
+        title_tf.paragraphs[0].font.color.rgb = RGBColor(0, 70, 127)
 
         # Add bullet points
         tf = content_placeholder.text_frame
@@ -176,6 +186,8 @@ def create_presentation(slides, pptx_filename='presentation.pptx'):
             p.level = 0
             p.font.size = Pt(24)
             p.font.color.rgb = RGBColor(50, 50, 50)
+            p.space_before = Pt(6)
+            p.space_after = Pt(6)
         
         # Set background color
         fill = slide.background.fill
@@ -188,7 +200,6 @@ def create_presentation(slides, pptx_filename='presentation.pptx'):
     # Save the presentation
     prs.save(pptx_filename)
 
-# New function to export slides to images
 def export_slides_to_images(pptx_filename, output_folder='slides'):
     # Create output folder if it doesn't exist
     if not os.path.exists(output_folder):
@@ -269,7 +280,7 @@ def main(pdf_path, voice="alloy"):
     # Step 4: Create PPTX presentation
     print("Creating PPTX presentation...")
     pptx_filename = 'presentation.pptx'
-    create_presentation(slides, pptx_filename)
+    create_presentation(slides, pptx_filename, presenter_name="DeepLearn")
     temp_files.append(pptx_filename)  # Track the PPTX file
 
     # Step 5: Export slides to images
@@ -286,7 +297,7 @@ def main(pdf_path, voice="alloy"):
     audio_filenames = []
 
     # Generate audio for intro slide
-    intro_script = "Welcome to this presentation. Let's dive into the topic."
+    intro_script = f"Welcome to this presentation on {slides[0]['title']}. Presented by DeepLearn."
     audio_filename = generate_audio(intro_script, 1, voice=voice)
     audio_filenames.append(audio_filename)
     temp_files.append(audio_filename)
