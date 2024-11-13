@@ -1,14 +1,19 @@
 import os
 import re
 import PyPDF2
-from PIL import Image, ImageDraw, ImageFont
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
 from nltk.tokenize import sent_tokenize
 from pathlib import Path
 from openai import OpenAI
+import subprocess
+from pdf2image import convert_from_path
 
 import nltk
 nltk.download('punkt')
+
+# Import pptx library for creating PPTX files
+from pptx import Presentation
+from pptx.util import Inches, Pt
 
 # Initialize OpenAI client with API key
 client = OpenAI(
@@ -82,45 +87,6 @@ def generate_presentation_script(slide_content, summarized_text):
     script = response.choices[0].message.content.strip()
     return script
 
-def create_slide_image(title, bullet_points, slide_number):
-    # Define image size and colors
-    img_width, img_height = 1280, 720
-    background_color = 'white'
-    title_color = 'black'
-    bullet_color = 'black'
-    
-    # Create an image
-    img = Image.new('RGB', (img_width, img_height), color=background_color)
-    draw = ImageDraw.Draw(img)
-    
-    # Load fonts (ensure the font path is correct)
-    try:
-        title_font = ImageFont.truetype("arial.ttf", 60)
-        bullet_font = ImageFont.truetype("arial.ttf", 40)
-    except IOError:
-        # If the font is not found, use a default font
-        title_font = ImageFont.load_default()
-        bullet_font = ImageFont.load_default()
-    
-    # Calculate positions
-    title_position = (50, 50)
-    bullet_start_y = 150
-    line_spacing = 50
-    
-    # Draw title
-    draw.text(title_position, title, font=title_font, fill=title_color)
-    
-    # Draw bullet points
-    y_text = bullet_start_y
-    for bullet in bullet_points:
-        draw.text((70, y_text), f"• {bullet}", font=bullet_font, fill=bullet_color)
-        y_text += line_spacing
-    
-    # Save image
-    slide_filename = f"slide_{slide_number}.png"
-    img.save(slide_filename)
-    return slide_filename
-
 def parse_slides_content(slides_content):
     slides = []
     # Split slides content into individual slides
@@ -135,27 +101,87 @@ def parse_slides_content(slides_content):
             slides.append({'title': title, 'bullet_points': bullet_points})
     return slides
 
+# New function to create a PPTX presentation
+def create_presentation(slides, pptx_filename='presentation.pptx'):
+    prs = Presentation()
+    # Set slide width and height if needed
+    # prs.slide_width = Inches(16)
+    # prs.slide_height = Inches(9)
+
+    for slide_content in slides:
+        slide = prs.slides.add_slide(prs.slide_layouts[1])  # Using Title and Content layout
+        title_placeholder = slide.shapes.title
+        content_placeholder = slide.placeholders[1]
+        
+        # Set the title
+        title_placeholder.text = slide_content['title']
+        
+        # Add bullet points
+        tf = content_placeholder.text_frame
+        tf.clear()  # Clear any existing content
+        for bullet_point in slide_content['bullet_points']:
+            p = tf.add_paragraph()
+            p.text = bullet_point
+            p.level = 0  # Set bullet level if needed
+            p.font.size = Pt(24)  # Set font size
+        
+    # Save the presentation
+    prs.save(pptx_filename)
+
+# New function to export slides to images
+def export_slides_to_images(pptx_filename, output_folder='slides'):
+    # Create output folder if it doesn't exist
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
+    # Define the paths
+    pptx_path = os.path.abspath(pptx_filename)
+    pdf_path = os.path.join(output_folder, "presentation.pdf")
+
+    # Step 1: Convert PPTX to PDF
+    command = [
+        "soffice",
+        "--headless",
+        "--convert-to", "pdf",
+        "--outdir", output_folder,
+        pptx_path
+    ]
+    subprocess.run(command, check=True)
+
+    # Step 2: Convert PDF to individual PNG images
+    slide_filenames = []
+    images = convert_from_path(pdf_path)
+    for i, image in enumerate(images):
+        slide_filename = os.path.join(output_folder, f"slide_{i+1}.png")
+        image.save(slide_filename, "PNG")
+        slide_filenames.append(slide_filename)
+
+    # Remove the intermediate PDF file if not needed
+    os.remove(pdf_path)
+
+    return slide_filenames
+
 def create_video(slide_filenames, audio_filenames, output_filename="presentation.mp4"):
     clips = []
     for slide_filename, audio_filename in zip(slide_filenames, audio_filenames):
         # Get audio duration
         audio_clip = AudioFileClip(audio_filename)
         duration = audio_clip.duration
-        
+
         # Create ImageClip with duration equal to audio duration
         image_clip = ImageClip(slide_filename).set_duration(duration)
-        
+
         # Set audio
         image_clip = image_clip.set_audio(audio_clip)
-        
+
         clips.append(image_clip)
-    
+
     # Concatenate clips
     final_clip = concatenate_videoclips(clips, method="compose")
-    
+
     # Write the video file
     final_clip.write_videofile(output_filename, fps=24)
-    
+
     # Close clips to release resources
     final_clip.close()
     for clip in clips:
@@ -165,36 +191,45 @@ def main(pdf_path, voice="alloy"):
     # Step 1: Extract text from PDF
     print("Extracting text from PDF...")
     text = extract_text_from_pdf(pdf_path)
-    
+
     # Step 2: Summarize the text
     print("Summarizing text to reduce token usage...")
     summarized_text = summarize_text(text)
-    
+
     # Step 3: Generate slides content
     print("Generating slides content...")
     slides_content = generate_slides_content(summarized_text)
-    
+
     # Parse the slides content
     slides = parse_slides_content(slides_content)
-    
-    slide_filenames = []
+
     audio_filenames = []
-    
+
+    # Step 4: Create PPTX presentation
+    print("Creating PPTX presentation...")
+    pptx_filename = 'presentation.pptx'
+    create_presentation(slides, pptx_filename)
+
+    # Step 5: Export slides to images
+    print("Exporting slides to images...")
+    slide_filenames = export_slides_to_images(pptx_filename)
+
+    # Ensure the number of slide images matches the number of slides
+    if len(slide_filenames) != len(slides):
+        print("Error: Number of slide images does not match number of slides.")
+        return
+
     for idx, slide in enumerate(slides):
         print(f"Processing Slide {idx+1}: {slide['title']}")
-        
-        # Step 4: Create slide image
-        slide_filename = create_slide_image(slide['title'], slide['bullet_points'], idx+1)
-        slide_filenames.append(slide_filename)
-        
-        # Step 5: Generate presentation script
+
+        # Step 6: Generate presentation script
         script = generate_presentation_script(slide, summarized_text)
-        
-        # Step 6: Generate audio
+
+        # Step 7: Generate audio
         audio_filename = generate_audio(script, idx+1, voice=voice)
         audio_filenames.append(audio_filename)
-    
-    # Step 7: Create video
+
+    # Step 8: Create video
     print("Creating video presentation...")
     create_video(slide_filenames, audio_filenames)
     print("Video presentation created successfully!")
