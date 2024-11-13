@@ -1,16 +1,19 @@
 import os
 import re
-import openai
 import PyPDF2
 from PIL import Image, ImageDraw, ImageFont
-from gtts import gTTS
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
 from nltk.tokenize import sent_tokenize
+from pathlib import Path
+from openai import OpenAI
 
 import nltk
 nltk.download('punkt')
 
-openai.api_key = ''
+# Initialize OpenAI client with API key
+client = OpenAI(
+    api_key = ''
+)
 
 def extract_text_from_pdf(pdf_path):
     pdfReader = PyPDF2.PdfReader(open(pdf_path, 'rb'))
@@ -22,8 +25,8 @@ def extract_text_from_pdf(pdf_path):
 def summarize_text(text, max_tokens=500):
     # Summarize the text to reduce token usage
     prompt = f"Please provide a concise summary of the following text:\n\n{text}"
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",  # Use a less expensive model
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo-0125",
         messages=[
             {"role": "system", "content": "You are an assistant that summarizes text efficiently."},
             {"role": "user", "content": prompt}
@@ -31,14 +34,14 @@ def summarize_text(text, max_tokens=500):
         max_tokens=max_tokens,
         temperature=0.5,
     )
-    summary = response['choices'][0]['message']['content'].strip()
+    summary = response.choices[0].message.content.strip()
     return summary
 
 def generate_slides_content(summarized_text):
     # Generate slides content using the summarized text
     prompt = f"Create up to 5 slide titles with bullet points from the following summary. Keep it concise:\n\n{summarized_text}"
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",  # Use a less expensive model
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo-0125",
         messages=[
             {"role": "system", "content": "You are an assistant that creates concise presentation slides."},
             {"role": "user", "content": prompt}
@@ -46,22 +49,38 @@ def generate_slides_content(summarized_text):
         max_tokens=350,
         temperature=0.5,
     )
-    slides_content = response['choices'][0]['message']['content'].strip()
+    slides_content = response.choices[0].message.content.strip()
     return slides_content
 
-def parse_slides_content(slides_content):
-    slides = []
-    # Split slides content into individual slides
-    slide_sections = re.split(r'\n(?=Slide \d+:)', slides_content)
-    for slide_section in slide_sections:
-        # Extract title
-        title_match = re.match(r'Slide \d+: (.+)', slide_section)
-        if title_match:
-            title = title_match.group(1).strip()
-            # Extract bullet points
-            bullet_points = re.findall(r'- (.+)', slide_section)
-            slides.append({'title': title, 'bullet_points': bullet_points})
-    return slides
+def generate_audio(script, slide_number, voice="alloy"):
+    """Generate audio using OpenAI's TTS API"""
+    speech_file_path = Path(f"audio_{slide_number}.mp3")
+    
+    response = client.audio.speech.create(
+        model="tts-1",
+        voice=voice,
+        input=script
+    )
+    
+    # Save the audio file
+    response.stream_to_file(str(speech_file_path))
+    
+    return str(speech_file_path)
+
+def generate_presentation_script(slide_content, summarized_text):
+    # Use the slide content and summarized text to generate a concise script
+    prompt = f"Write a brief and engaging script for a presentation slide based on the following:\n\nSlide Title: {slide_content['title']}\nBullet Points:\n" + "\n".join(f"- {bp}" for bp in slide_content['bullet_points']) + f"\n\nUse the following summary for context:\n{summarized_text}"
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo-0125",
+        messages=[
+            {"role": "system", "content": "You are an assistant that writes concise presentation scripts."},
+            {"role": "user", "content": prompt}
+        ],
+        max_tokens=250,
+        temperature=0.5,
+    )
+    script = response.choices[0].message.content.strip()
+    return script
 
 def create_slide_image(title, bullet_points, slide_number):
     # Define image size and colors
@@ -102,26 +121,19 @@ def create_slide_image(title, bullet_points, slide_number):
     img.save(slide_filename)
     return slide_filename
 
-def generate_presentation_script(slide_content, summarized_text):
-    # Use the slide content and summarized text to generate a concise script
-    prompt = f"Write a brief and engaging script for a presentation slide based on the following:\n\nSlide Title: {slide_content['title']}\nBullet Points:\n" + "\n".join(f"- {bp}" for bp in slide_content['bullet_points']) + f"\n\nUse the following summary for context:\n{summarized_text}"
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",  # Use less expensive model
-        messages=[
-            {"role": "system", "content": "You are an assistant that writes concise presentation scripts."},
-            {"role": "user", "content": prompt}
-        ],
-        max_tokens=250,
-        temperature=0.5,
-    )
-    script = response['choices'][0]['message']['content'].strip()
-    return script
-
-def generate_audio(script, slide_number, language='en'):
-    tts = gTTS(text=script, lang=language)
-    audio_filename = f"audio_{slide_number}.mp3"
-    tts.save(audio_filename)
-    return audio_filename
+def parse_slides_content(slides_content):
+    slides = []
+    # Split slides content into individual slides
+    slide_sections = re.split(r'\n(?=Slide \d+:)', slides_content)
+    for slide_section in slide_sections:
+        # Extract title
+        title_match = re.match(r'Slide \d+: (.+)', slide_section)
+        if title_match:
+            title = title_match.group(1).strip()
+            # Extract bullet points
+            bullet_points = re.findall(r'- (.+)', slide_section)
+            slides.append({'title': title, 'bullet_points': bullet_points})
+    return slides
 
 def create_video(slide_filenames, audio_filenames, output_filename="presentation.mp4"):
     clips = []
@@ -149,7 +161,7 @@ def create_video(slide_filenames, audio_filenames, output_filename="presentation
     for clip in clips:
         clip.close()
 
-def main(pdf_path):
+def main(pdf_path, voice="alloy"):
     # Step 1: Extract text from PDF
     print("Extracting text from PDF...")
     text = extract_text_from_pdf(pdf_path)
@@ -179,7 +191,7 @@ def main(pdf_path):
         script = generate_presentation_script(slide, summarized_text)
         
         # Step 6: Generate audio
-        audio_filename = generate_audio(script, idx+1)
+        audio_filename = generate_audio(script, idx+1, voice=voice)
         audio_filenames.append(audio_filename)
     
     # Step 7: Create video
@@ -189,4 +201,5 @@ def main(pdf_path):
 
 if __name__ == '__main__':
     pdf_path = 'input.pdf'  # Replace with your PDF file path
-    main(pdf_path)
+    voice = 'alloy'  # Can be: alloy, echo, fable, onyx, nova, or shimmer
+    main(pdf_path, voice)
