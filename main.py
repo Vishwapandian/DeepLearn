@@ -7,13 +7,13 @@ from pathlib import Path
 from openai import OpenAI
 import subprocess
 from pdf2image import convert_from_path
-
 import nltk
 nltk.download('punkt')
 
 # Import pptx library for creating PPTX files
 from pptx import Presentation
 from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
 
 # Initialize OpenAI client with API key
 client = OpenAI(
@@ -104,12 +104,57 @@ def parse_slides_content(slides_content):
             slides.append({'title': title, 'bullet_points': bullet_points})
     return slides
 
-# New function to create a PPTX presentation
+# New function to create intro and outro slides
+def create_intro_slide(prs, title_text, subtitle_text):
+    slide = prs.slides.add_slide(prs.slide_layouts[0])  # Title Slide layout
+    title_placeholder = slide.shapes.title
+    subtitle_placeholder = slide.placeholders[1]
+
+    # Set title
+    title_placeholder.text = title_text
+    title_placeholder.text_frame.paragraphs[0].font.size = Pt(48)
+    title_placeholder.text_frame.paragraphs[0].font.bold = True
+    title_placeholder.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+
+    # Set subtitle
+    subtitle_placeholder.text = subtitle_text
+    subtitle_placeholder.text_frame.paragraphs[0].font.size = Pt(24)
+    subtitle_placeholder.text_frame.paragraphs[0].font.color.rgb = RGBColor(200, 200, 200)
+
+    # Set background color
+    fill = slide.background.fill
+    fill.solid()
+    fill.fore_color.rgb = RGBColor(0, 70, 127)  # Dark blue
+
+def create_outro_slide(prs, thank_you_text):
+    slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank Slide layout
+    left = top = Inches(1)
+    width = prs.slide_width - Inches(2)
+    height = prs.slide_height - Inches(2)
+
+    textbox = slide.shapes.add_textbox(left, top, width, height)
+    tf = textbox.text_frame
+    p = tf.add_paragraph()
+    p.text = thank_you_text
+    p.font.size = Pt(48)
+    p.font.bold = True
+    p.font.color.rgb = RGBColor(255, 255, 255)
+    p.alignment = 1  # Center alignment
+
+    # Set background color
+    fill = slide.background.fill
+    fill.solid()
+    fill.fore_color.rgb = RGBColor(0, 70, 127)  # Dark blue
+
+# Updated function to create a PPTX presentation with better visuals and intro/outro slides
 def create_presentation(slides, pptx_filename='presentation.pptx'):
     prs = Presentation()
-    # Set slide width and height if needed
-    # prs.slide_width = Inches(16)
-    # prs.slide_height = Inches(9)
+    # Set slide size to widescreen 16:9
+    prs.slide_width = Inches(13.33)
+    prs.slide_height = Inches(7.5)
+
+    # Create intro slide
+    create_intro_slide(prs, "Presentation Title", "Subtitle or Presenter Name")
 
     for slide_content in slides:
         slide = prs.slides.add_slide(prs.slide_layouts[1])  # Using Title and Content layout
@@ -118,16 +163,28 @@ def create_presentation(slides, pptx_filename='presentation.pptx'):
         
         # Set the title
         title_placeholder.text = slide_content['title']
-        
+        title_placeholder.text_frame.paragraphs[0].font.size = Pt(36)
+        title_placeholder.text_frame.paragraphs[0].font.bold = True
+        title_placeholder.text_frame.paragraphs[0].font.color.rgb = RGBColor(0, 70, 127)
+
         # Add bullet points
         tf = content_placeholder.text_frame
         tf.clear()  # Clear any existing content
         for bullet_point in slide_content['bullet_points']:
             p = tf.add_paragraph()
             p.text = bullet_point
-            p.level = 0  # Set bullet level if needed
-            p.font.size = Pt(24)  # Set font size
+            p.level = 0
+            p.font.size = Pt(24)
+            p.font.color.rgb = RGBColor(50, 50, 50)
         
+        # Set background color
+        fill = slide.background.fill
+        fill.solid()
+        fill.fore_color.rgb = RGBColor(230, 230, 230)  # Light gray background
+
+    # Create outro slide
+    create_outro_slide(prs, "Thank You!")
+
     # Save the presentation
     prs.save(pptx_filename)
 
@@ -220,13 +277,21 @@ def main(pdf_path, voice="alloy"):
     slide_filenames = export_slides_to_images(pptx_filename)
     temp_files.extend(slide_filenames)  # Track all slide image files
 
-    # Ensure the number of slide images matches the number of slides
-    if len(slide_filenames) != len(slides):
-        print("Error: Number of slide images does not match number of slides.")
+    # Ensure the number of slide images matches the number of slides plus intro and outro
+    expected_slides = len(slides) + 2  # Intro and Outro slides
+    if len(slide_filenames) != expected_slides:
+        print("Error: Number of slide images does not match expected number of slides.")
         return
 
     audio_filenames = []
 
+    # Generate audio for intro slide
+    intro_script = "Welcome to this presentation. Let's dive into the topic."
+    audio_filename = generate_audio(intro_script, 1, voice=voice)
+    audio_filenames.append(audio_filename)
+    temp_files.append(audio_filename)
+
+    # Generate audio for main slides
     for idx, slide in enumerate(slides):
         print(f"Processing Slide {idx+1}: {slide['title']}")
 
@@ -234,9 +299,15 @@ def main(pdf_path, voice="alloy"):
         script = generate_presentation_script(slide, summarized_text)
 
         # Step 7: Generate audio
-        audio_filename = generate_audio(script, idx+1, voice=voice)
+        audio_filename = generate_audio(script, idx+2, voice=voice)  # idx+2 because intro slide is first
         audio_filenames.append(audio_filename)
-        temp_files.append(audio_filename)  # Track each audio file
+        temp_files.append(audio_filename)
+
+    # Generate audio for outro slide
+    outro_script = "Thank you for watching this presentation."
+    audio_filename = generate_audio(outro_script, len(slides)+2, voice=voice)
+    audio_filenames.append(audio_filename)
+    temp_files.append(audio_filename)
 
     # Step 8: Create video
     print("Creating video presentation...")
