@@ -2,13 +2,10 @@ import os
 import re
 import PyPDF2
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
-from nltk.tokenize import sent_tokenize
 from pathlib import Path
 from openai import OpenAI
 import subprocess
 from pdf2image import convert_from_path
-import nltk
-nltk.download('punkt')
 
 # Import pptx library for creating PPTX files
 from pptx import Presentation
@@ -21,44 +18,111 @@ client = OpenAI(
     api_key = ''
 )
 
-def extract_text_from_pdf(pdf_path):
-    pdfReader = PyPDF2.PdfReader(open(pdf_path, 'rb'))
-    text = ""
-    for page in pdfReader.pages:
-        text += page.extract_text()
-    return text
+def generate_slides_and_scripts(text):
+    # System prompt to set the context and expectations
+    system_prompt = """You are an expert university professor and instructional designer specializing in creating engaging educational content. Your task is to create a college-level presentation that:
 
-def summarize_text(text, max_tokens=500):
-    # Summarize the text to reduce token usage
-    prompt = f"Please provide a concise summary of the following text:\n\n{text}"
+1. Structures complex information in a clear, logical sequence
+2. Uses academic language while remaining accessible
+3. Follows educational best practices for slide design:
+   - Clear hierarchy of information
+   - 3-5 key points per slide
+   - Meaningful titles that convey main ideas
+   - Bullet points that support learning objectives
+4. Creates engaging narrative scripts that:
+   - Expand significantly on slide content
+   - Include relevant examples and case studies
+   - Connect concepts to real-world applications
+   - Use rhetorical questions and thought experiments
+   - Maintain a conversational yet professional tone
+
+Each slide should build upon previous concepts and contribute to a cohesive learning experience."""
+
+    # Generate slides content and scripts using the extracted text
+    prompt = f"""Create a detailed university-level presentation based on the following text. Structure the presentation to maximize student learning and engagement.
+
+For each slide, provide:
+1. A clear, conceptual title that frames the main idea
+2. 3-5 carefully crafted bullet points that:
+   - Present key academic concepts
+   - Use precise terminology
+   - Support progressive understanding
+   - Include relevant data or evidence when applicable
+
+3. A detailed script (2-3 minutes) that:
+   - Provides deeper context and explanations
+   - Includes specific examples and case studies
+   - Connects to broader academic frameworks
+   - Poses thought-provoking questions
+   - Explains complex relationships between concepts
+   - Uses analogies to clarify difficult ideas
+   - Maintains student engagement through narrative techniques
+
+Format the output exactly as follows:
+
+### Slide 1:
+Title: [Conceptual Title]
+Bullet Points:
+- [Academic point with supporting evidence]
+- [Key concept with precise terminology]
+- [Critical relationship or framework]
+Script:
+[Detailed narrative that significantly expands on the bullet points while maintaining engagement]
+
+### Slide 2:
+[Continue format...]
+
+Source Text:
+{text}"""
+
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o-mini",  # Using the latest model for best quality
         messages=[
-            {"role": "system", "content": "You are an assistant that summarizes text efficiently."},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
         ],
-        max_tokens=max_tokens,
-        temperature=0.5,
+        max_tokens=16384,
+        temperature=0.7,  # Slightly increased for more creative and engaging scripts
     )
-    summary = response.choices[0].message.content.strip()
-    print(summary)
-    return summary
+    
+    slides_and_scripts = response.choices[0].message.content.strip()
+    return slides_and_scripts
 
-def generate_slides_content(summarized_text):
-    # Generate slides content using the summarized text
-    prompt = f"Create up to 5 slide titles with bullet points from the following summary. Keep it concise:\n\n{summarized_text}"
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are an assistant that creates concise presentation slides."},
-            {"role": "user", "content": prompt}
-        ],
-        max_tokens=350,
-        temperature=0.5,
+def generate_audio(script, slide_number, voice="alloy"):
+    """Generate audio using OpenAI's TTS API with enhanced speaking instructions"""
+    
+    # Add presentation instructions to the script
+    enhanced_script = f"""[Speak in an engaging, professional tone appropriate for a university lecture. Maintain a steady, clear pace with natural pauses for emphasis and comprehension. Use vocal variety to highlight key points and maintain student attention.]
+
+{script}"""
+    
+    speech_file_path = Path(f"audio_{slide_number}.mp3")
+    
+    response = client.audio.speech.create(
+        model="tts-1",  # Using HD model for better quality
+        voice=voice,
+        input=enhanced_script,
+        speed=0.9  # Slightly slower for better comprehension
     )
-    slides_content = response.choices[0].message.content.strip()
-    print(slides_content)
-    return slides_content
+    
+    response.stream_to_file(str(speech_file_path))
+    return str(speech_file_path)
+
+def parse_slides_and_scripts(content):
+    slides = []
+    # Split content into individual slides
+    slide_sections = re.split(r'\n### Slide \d+:\n', content)
+    for slide_section in slide_sections[1:]:  # Skip the first empty split
+        # Extract title
+        title_match = re.search(r'Title:\s*(.+)', slide_section)
+        title = title_match.group(1).strip() if title_match else "Untitled Slide"
+        # Extract bullet points
+        bullet_points = re.findall(r'- (.+)', slide_section)
+        # Extract script
+        script_match = re.search(r'Script:\n(.+)', slide_section, re.DOTALL)
+        script = script_match.group(1).strip() if script_match else ""
+        slides.append({'title': title, 'bullet_points': bullet_points, 'script': script})
+    return slides
 
 def generate_audio(script, slide_number, voice="alloy"):
     """Generate audio using OpenAI's TTS API"""
@@ -75,37 +139,45 @@ def generate_audio(script, slide_number, voice="alloy"):
     
     return str(speech_file_path)
 
-def generate_presentation_script(slide_content, summarized_text):
-    # Use the slide content and summarized text to generate a concise script
-    prompt = f"Write a brief and engaging script for a presentation slide based on the following:\n\nSlide Title: {slide_content['title']}\nBullet Points:\n" + "\n".join(f"- {bp}" for bp in slide_content['bullet_points']) + f"\n\nUse the following summary for context:\n{summarized_text}"
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are an assistant that writes concise presentation scripts."},
-            {"role": "user", "content": prompt}
-        ],
-        max_tokens=250,
-        temperature=0.5,
-    )
-    script = response.choices[0].message.content.strip()
-    print(script)
-    return script
+def export_slides_to_images(pptx_filename, output_folder='slides'):
+    # Create output folder if it doesn't exist
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
 
-def parse_slides_content(slides_content):
-    slides = []
-    # Split slides content into individual slides
-    slide_sections = re.split(r'\n(?=### Slide \d+:)', slides_content)
-    for slide_section in slide_sections:
-        # Extract title
-        title_match = re.match(r'### Slide \d+: (.+)', slide_section)
-        if title_match:
-            title = title_match.group(1).strip()
-            # Extract bullet points
-            bullet_points = re.findall(r'- (.+)', slide_section)
-            slides.append({'title': title, 'bullet_points': bullet_points})
-    return slides
+    # Define the paths
+    pptx_path = os.path.abspath(pptx_filename)
+    pdf_path = os.path.join(output_folder, "presentation.pdf")
 
-# Updated function to create intro and outro slides with custom title and presenter name
+    # Step 1: Convert PPTX to PDF
+    command = [
+        "soffice",
+        "--headless",
+        "--convert-to", "pdf",
+        "--outdir", output_folder,
+        pptx_path
+    ]
+    subprocess.run(command, check=True)
+
+    # Step 2: Convert PDF to individual PNG images
+    slide_filenames = []
+    images = convert_from_path(pdf_path)
+    for i, image in enumerate(images):
+        slide_filename = os.path.join(output_folder, f"slide_{i+1}.png")
+        image.save(slide_filename, "PNG")
+        slide_filenames.append(slide_filename)
+
+    # Remove the intermediate PDF file if not needed
+    os.remove(pdf_path)
+
+    return slide_filenames
+
+def extract_text_from_pdf(pdf_path):
+    pdfReader = PyPDF2.PdfReader(open(pdf_path, 'rb'))
+    text = ""
+    for page in pdfReader.pages:
+        text += page.extract_text()
+    return text
+
 def create_intro_slide(prs, title_text, subtitle_text):
     slide = prs.slides.add_slide(prs.slide_layouts[0])  # Title Slide layout
     title_placeholder = slide.shapes.title
@@ -152,17 +224,12 @@ def create_outro_slide(prs, thank_you_text):
     fill.solid()
     fill.fore_color.rgb = RGBColor(0, 70, 127)  # Dark blue
 
-# Updated function to create a PPTX presentation with better visuals and custom intro slide
 def create_presentation(slides, pptx_filename='presentation.pptx', presenter_name="DeepLearn"):
     prs = Presentation()
-    # Set slide size to widescreen 16:9
     prs.slide_width = Inches(13.33)
     prs.slide_height = Inches(7.5)
 
-    # Use the title of the first slide as the presentation title
     presentation_title = slides[0]['title'] if slides else "Presentation"
-
-    # Create intro slide with custom title and presenter name
     create_intro_slide(prs, presentation_title, f"Presented by {presenter_name}")
 
     for slide_content in slides:
@@ -170,67 +237,35 @@ def create_presentation(slides, pptx_filename='presentation.pptx', presenter_nam
         title_placeholder = slide.shapes.title
         content_placeholder = slide.placeholders[1]
         
-        # Set the title
+        # Set the title with improved spacing and size
         title_placeholder.text = slide_content['title']
         title_tf = title_placeholder.text_frame
-        title_tf.paragraphs[0].font.size = Pt(36)
+        title_tf.paragraphs[0].font.size = Pt(40)
         title_tf.paragraphs[0].font.bold = True
         title_tf.paragraphs[0].font.color.rgb = RGBColor(0, 70, 127)
+        title_tf.paragraphs[0].alignment = PP_ALIGN.LEFT  # Align to left for consistency
 
-        # Add bullet points
+        # Add bullet points with more controlled spacing and font adjustments
         tf = content_placeholder.text_frame
         tf.clear()  # Clear any existing content
         for bullet_point in slide_content['bullet_points']:
             p = tf.add_paragraph()
             p.text = bullet_point
             p.level = 0
-            p.font.size = Pt(24)
+            p.font.size = Pt(28)
             p.font.color.rgb = RGBColor(50, 50, 50)
-            p.space_before = Pt(6)
-            p.space_after = Pt(6)
-        
-        # Set background color
+            p.space_before = Pt(8)
+            p.space_after = Pt(8)
+            p.alignment = PP_ALIGN.LEFT
+
+        # Set background color to improve visual contrast
         fill = slide.background.fill
         fill.solid()
-        fill.fore_color.rgb = RGBColor(230, 230, 230)  # Light gray background
+        fill.fore_color.rgb = RGBColor(240, 240, 240)  # Light gray background for better contrast
 
     # Create outro slide
     create_outro_slide(prs, "Thank You!")
-
-    # Save the presentation
     prs.save(pptx_filename)
-
-def export_slides_to_images(pptx_filename, output_folder='slides'):
-    # Create output folder if it doesn't exist
-    if not os.path.exists(output_folder):
-        os.makedirs(output_folder)
-
-    # Define the paths
-    pptx_path = os.path.abspath(pptx_filename)
-    pdf_path = os.path.join(output_folder, "presentation.pdf")
-
-    # Step 1: Convert PPTX to PDF
-    command = [
-        "soffice",
-        "--headless",
-        "--convert-to", "pdf",
-        "--outdir", output_folder,
-        pptx_path
-    ]
-    subprocess.run(command, check=True)
-
-    # Step 2: Convert PDF to individual PNG images
-    slide_filenames = []
-    images = convert_from_path(pdf_path)
-    for i, image in enumerate(images):
-        slide_filename = os.path.join(output_folder, f"slide_{i+1}.png")
-        image.save(slide_filename, "PNG")
-        slide_filenames.append(slide_filename)
-
-    # Remove the intermediate PDF file if not needed
-    os.remove(pdf_path)
-
-    return slide_filenames
 
 def create_video(slide_filenames, audio_filenames, output_filename="presentation.mp4"):
     clips = []
@@ -258,32 +293,29 @@ def create_video(slide_filenames, audio_filenames, output_filename="presentation
     for clip in clips:
         clip.close()
 
+# Updated main function
 def main(pdf_path, voice="alloy"):
     # Step 1: Extract text from PDF
     print("Extracting text from PDF...")
     text = extract_text_from_pdf(pdf_path)
 
-    # Step 2: Summarize the text
-    print("Summarizing text to reduce token usage...")
-    summarized_text = summarize_text(text)
+    # Step 2: Generate slides content and scripts
+    print("Generating slides content and scripts...")
+    slides_and_scripts = generate_slides_and_scripts(text)
 
-    # Step 3: Generate slides content
-    print("Generating slides content...")
-    slides_content = generate_slides_content(summarized_text)
-
-    # Parse the slides content
-    slides = parse_slides_content(slides_content)
+    # Parse the slides content and scripts
+    slides = parse_slides_and_scripts(slides_and_scripts)
 
     # List to track temp files
     temp_files = []
 
-    # Step 4: Create PPTX presentation
+    # Step 3: Create PPTX presentation
     print("Creating PPTX presentation...")
     pptx_filename = 'presentation.pptx'
     create_presentation(slides, pptx_filename, presenter_name="DeepLearn")
     temp_files.append(pptx_filename)  # Track the PPTX file
 
-    # Step 5: Export slides to images
+    # Step 4: Export slides to images
     print("Exporting slides to images...")
     slide_filenames = export_slides_to_images(pptx_filename)
     temp_files.extend(slide_filenames)  # Track all slide image files
@@ -302,14 +334,14 @@ def main(pdf_path, voice="alloy"):
     audio_filenames.append(audio_filename)
     temp_files.append(audio_filename)
 
-    # Generate audio for main slides
+    # Generate audio for main slides using the scripts from the slides
     for idx, slide in enumerate(slides):
         print(f"Processing Slide {idx+1}: {slide['title']}")
 
-        # Step 6: Generate presentation script
-        script = generate_presentation_script(slide, summarized_text)
+        # Use the script generated earlier
+        script = slide['script']
 
-        # Step 7: Generate audio
+        # Step 5: Generate audio
         audio_filename = generate_audio(script, idx+2, voice=voice)  # idx+2 because intro slide is first
         audio_filenames.append(audio_filename)
         temp_files.append(audio_filename)
@@ -320,7 +352,7 @@ def main(pdf_path, voice="alloy"):
     audio_filenames.append(audio_filename)
     temp_files.append(audio_filename)
 
-    # Step 8: Create video
+    # Step 6: Create video
     print("Creating video presentation...")
     output_filename = "presentation.mp4"
     create_video(slide_filenames, audio_filenames, output_filename)
